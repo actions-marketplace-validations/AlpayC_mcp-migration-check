@@ -19,6 +19,8 @@ export interface Finding {
   fix: string;
   /** Pointer into the canonical spec so the user can verify the rule. */
   specRef: string;
+  /** Additional authoritative references (e.g. per-SDK repos). */
+  references?: string[];
   /** "live endpoint" or a `file:line` reference for source findings. */
   location?: string;
 }
@@ -54,6 +56,64 @@ export interface CheckResult {
  * - `unknown` — nothing answered in a way that identified either era.
  */
 export type ServerEra = "modern" | "legacy" | "dual" | "unknown";
+
+/** Package ecosystem that declared an MCP SDK dependency. */
+export type Ecosystem = "npm" | "cargo" | "go"; // extensible: "pypi" | "nuget"
+
+/**
+ * Cargo section a dependency was declared under.
+ *
+ * The distinction is not cosmetic: a crate under `dev-dependencies` never ships,
+ * and one under `workspace.dependencies` need not be used by any member. A
+ * finding has to say which it read, or the reader cannot judge it.
+ */
+export type CargoSection = "dependencies" | "dev-dependencies" | "workspace.dependencies";
+
+/**
+ * Which protocol era a Go module requirement resolves to.
+ *
+ * `unknown` is a first-class answer, not a failure. A `replace`d module, a
+ * pseudo-version and a `+incompatible` tag all name something whose protocol
+ * support the version string does not describe, and the house rule is to stay
+ * quiet rather than guess — see `classifyGoSdkVersion`.
+ */
+export type GoSdkLine = "legacy" | "modern" | "unknown";
+
+/** A single declared MCP SDK dependency, normalized across manifest kinds. */
+export interface SdkDependency {
+  ecosystem: Ecosystem;
+  /** Package/crate/module path as declared, e.g. "rmcp" or "github.com/mark3labs/mcp-go". */
+  name: string;
+  /** Raw version constraint as written: "^1.17.0", "3", "3.1.4", "v1.6.1". */
+  constraint: string;
+  /** Manifest that declared it, relative to scan root — feeds Finding.location. */
+  manifest: string; // "package.json" | "Cargo.toml" | "go.mod"
+  /** Cargo feature flags, when the manifest expresses them. */
+  features?: string[];
+  /** Cargo section it was declared under; absent for npm and Go. */
+  section?: CargoSection;
+  /** Line within `manifest`, so a Go finding can point at `go.mod:12`. */
+  line?: number;
+  /**
+   * Go: the requirement carried `// indirect`.
+   *
+   * Not the same as a Cargo dev-dependency, and the difference matters. `//
+   * indirect` is an assertion the toolchain maintains: no package in this
+   * module imports it. So it is not this project's SDK choice, it is a
+   * transitive pin — reporting it would tell a maintainer to change a line
+   * that `go mod tidy` will rewrite anyway.
+   */
+  indirect?: boolean;
+  /**
+   * Go: a `replace` directive redirects this module.
+   *
+   * `constraint` then describes something the build does not use, so the
+   * requirement is classified `unknown` and reported by nothing.
+   */
+  replaced?: boolean;
+  /** Go: which protocol era `constraint` resolves to. Absent for npm and Cargo. */
+  sdkLine?: GoSdkLine;
+}
 
 /** Normalized observations from probing a running MCP server over HTTP. */
 export interface ProbeContext {
@@ -127,6 +187,21 @@ export interface SourceContext {
   sdkVersion: string | null;
   /** Direct `mcp` dependencies found in Python project metadata. */
   pythonSdkRequirements?: PythonSdkRequirement[];
+  /**
+   * MCP SDK dependencies read from `Cargo.toml` and `go.mod`; npm goes through
+   * `sdkVersion` and Python through `pythonSdkRequirements`.
+   */
+  sdkDependencies?: SdkDependency[];
+  /**
+   * Every `go.mod` found under the scan root, whether or not it declares an
+   * MCP module.
+   *
+   * Module ownership needs all of them. Deriving it from `sdkDependencies`
+   * alone made a nested module that happens to declare no MCP SDK invisible,
+   * and its files were then attributed to the parent module — which produced a
+   * finding naming a transport in a directory the parent does not own.
+   */
+  goManifests?: string[];
   filesScanned: number;
 }
 
@@ -140,6 +215,8 @@ export interface Rule {
   title: string;
   severity: Severity;
   specRef: string;
+  /** Additional authoritative references (e.g. per-SDK repos for multi-crate rules). */
+  references?: string[];
   /** Returns a Finding when the rule fires, otherwise null. */
   evaluate(ctx: RuleContext): Finding | null;
 }

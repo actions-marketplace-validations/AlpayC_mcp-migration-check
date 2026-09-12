@@ -43,6 +43,25 @@ const MARKERS = {
     "2026-07-28",
   "https://py.sdk.modelcontextprotocol.io/migration/":
     "Migration Guide: v1 to v2",
+  "https://github.com/modelcontextprotocol/rust-sdk":
+    "official Rust Model Context Protocol SDK",
+  // The release tag prefix, not the word "Releases": that sits in the nav of
+  // every GitHub page and would pass on a 404 shell.
+  "https://github.com/modelcontextprotocol/rust-sdk/releases":
+    "rmcp-v",
+  "https://github.com/joshrotenberg/tower-mcp":
+    "Tower-native Model Context Protocol",
+  "https://github.com/rust-mcp-stack/rust-mcp-sdk":
+    "high-performance, asynchronous Rust toolkit for building MCP",
+  // Version-pinned package pages, so the marker proves the CLAIM rather than
+  // merely proving the page exists: `DiscoverResult` is the modern surface and
+  // is absent from go-sdk v1.6.1, and `ProtocolVersion20260728` is the constant
+  // mark3labs added in v1.0.0. A page that stopped carrying either would mean
+  // MCP011's threshold needs re-reading.
+  "https://pkg.go.dev/github.com/modelcontextprotocol/go-sdk@v1.7.0/mcp":
+    "DiscoverResult",
+  "https://pkg.go.dev/github.com/mark3labs/mcp-go@v1.0.0/mcp":
+    "ProtocolVersion20260728",
 };
 
 const TIMEOUT_MS = 20_000;
@@ -76,7 +95,12 @@ async function check(url, marker) {
   }
 }
 
-const refs = [...new Set(rules.map((r) => r.specRef))].sort();
+const refs = [
+  ...new Set([
+    ...rules.map((r) => r.specRef),
+    ...rules.flatMap((r) => r.references ?? []),
+  ]),
+].sort();
 let failed = 0;
 
 // Coverage first: an unmarked ref is a silent gap, not a pass.

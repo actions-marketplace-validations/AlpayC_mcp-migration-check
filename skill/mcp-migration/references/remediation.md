@@ -12,6 +12,8 @@ saw, how to tell a real hazard from noise, and the shape of the fix.
 - [MCP007 — TypeScript SDK still on the v1 line](#mcp007--typescript-sdk-still-on-the-v1-line)
 - [MCP008 — `server/discover` not implemented](#mcp008--serverdiscover-not-implemented)
 - [MCP009 — Python SDK still on the v1 line](#mcp009--python-sdk-still-on-the-v1-line)
+- [MCP010 — Rust MCP SDK on a pre-2026-07-28 line](#mcp010--rust-mcp-sdk-on-a-pre-2026-07-28-line)
+- [MCP011 — Go MCP SDK not serving the 2026-07-28 revision](#mcp011--go-mcp-sdk-not-serving-the-2026-07-28-revision)
 - [MCP101 / MCP102 — compatibility observations](#mcp101--mcp102--compatibility-observations)
 
 Verify exact signatures and header names against the
@@ -302,9 +304,11 @@ mismatch between things that appear identical. Check the lockfile, not just
 `package.json`.
 
 **Other languages.** Python has its own SDK rule, MCP009, because its v2
-migration keeps the `mcp` package name. C# and Go are still not dependency-
-checked; inspect their actual SDK constraints rather than applying the
-TypeScript package-rename story.
+migration keeps the `mcp` package name; Rust has MCP010 and Go has MCP011.
+**C# is not scanned at all** — `.cs` files are not read, so a source scan of a
+C# server reports nothing, and that clean result means nothing. Inspect its SDK
+constraints by hand, or probe it live. Do not apply the TypeScript
+package-rename story to it.
 
 ---
 
@@ -392,6 +396,193 @@ official `mcp.server.fastmcp` path. A project using the separate third-party
 `fastmcp` distribution does not match it. A legacy constraint in a nested
 example or test project can still be intentional; use the reported
 `file:line` to decide whether that project ships the server under review.
+
+---
+
+## MCP010 — Rust MCP SDK on a pre-2026-07-28 line
+
+**Severity:** warning — worth **15** points.
+
+**What it means.** The project depends on a Rust MCP crate that speaks an
+older protocol revision. The three supported crates are:
+
+| Crate | Status | Fix |
+|-------|--------|-----|
+| `rmcp` | Current line for 2026-07-28 at major ≥ 3 | Upgrade to 3.x |
+| `rust-mcp-sdk` | v1.x only speaks 2025-11-25; v2.x speaks 2026-07-28 | Upgrade to 2.x or migrate to `rmcp` 3.x |
+| `tower-mcp` | Speaks 2026-07-28 only with the `protocol-2026-07-28` feature | Enable that feature |
+
+**Per-SDK authoritative references:**
+
+| Crate | Repository |
+|-------|------------|
+| `rmcp` (official) | [modelcontextprotocol/rust-sdk](https://github.com/modelcontextprotocol/rust-sdk) — [releases](https://github.com/modelcontextprotocol/rust-sdk/releases) |
+| `tower-mcp` | [joshrotenberg/tower-mcp](https://github.com/joshrotenberg/tower-mcp) |
+| `rust-mcp-sdk` | [rust-mcp-stack/rust-mcp-sdk](https://github.com/rust-mcp-stack/rust-mcp-sdk) |
+
+**How to fix.** Open `Cargo.toml` and update the dependency:
+
+```toml
+# rmcp — upgrade to 3.x
+[dependencies]
+rmcp = "3"
+
+# tower-mcp — enable the protocol feature
+[dependencies]
+tower-mcp = { version = "1", features = ["protocol-2026-07-28"] }
+```
+
+For `rust-mcp-sdk`, upgrade to 2.x (which speaks 2026-07-28) or migrate to
+`rmcp` 3.x. The `rmcp` crate is the official Rust SDK maintained in the
+[modelcontextprotocol/rust-sdk](https://github.com/modelcontextprotocol/rust-sdk)
+repository.
+
+**Telling real from noise.** The rule checks `Cargo.toml` dependency
+declarations, not source imports. A crate declared outside `[dependencies]` does
+not necessarily ship: one under `[dev-dependencies]` never reaches a release
+build, and one under `[workspace.dependencies]` need not be used by any member.
+The finding names the section it read whenever it is not a plain
+`[dependencies]`, so the `detail` line tells you which case you are looking at.
+
+When several crates are affected, the finding names all of them rather than
+stopping at the first — a stale `rmcp` alongside a misconfigured `tower-mcp`
+reports both.
+
+For `tower-mcp`, the rule can only report a missing `protocol-2026-07-28`
+feature when it has actually parsed a feature list that omits it. A bare
+`tower-mcp = "1"` without an explicit `features = [...]` is silently skipped —
+the parser cannot distinguish "no features configured" from "features inherited
+via workspace." This avoids false positives at the cost of occasional false
+negatives.
+
+### Scope and limitations
+
+The `Cargo.toml` parser is dependency-free and line-oriented by design (the
+skill bundle must stay lean). It understands exactly these constructs:
+
+- **Sections:** `[dependencies]`, `[dev-dependencies]`,
+  `[workspace.dependencies]`, with whitespace inside the brackets
+- **Forms:** inline string (`rmcp = "3.1.4"`), inline table
+  (`rmcp = { version = "3", features = [...] }`) on one line or wrapped across
+  several, and the sub-table (`[dependencies.rmcp]` with `version` and
+  `features` as keys)
+- **Crates:** only `rmcp`, `rust-mcp-sdk`, and `tower-mcp` — other
+  dependencies are silently skipped
+
+It does **not** handle:
+
+- **Workspace member manifests** — only the root `Cargo.toml` is read;
+  members inheriting dependencies via `workspace = true` are invisible
+- **Renamed dependencies** — the `package = "rmcp"` form (e.g.
+  `my-rmcp = { package = "rmcp", version = "3" }`) is not recognized
+- **`workspace = true` inheritance** — a dependency declared as
+  `rmcp.workspace = true` without a version in the same manifest is skipped
+- **Target-specific tables** — `[target.'cfg(...)'.dependencies]` and similar
+  are not scanned
+- **Version ranges it cannot read unambiguously** — the major is taken from the
+  start of the constraint, optionally behind a `^` or `~`. A range such as
+  `">=1, <4"` permits a clean 3.x, so the rule stays quiet rather than guessing
+  from it.
+
+A finding therefore proves that the **root `Cargo.toml`** declares one of the
+three crates at a version the rule considers pre-2026-07-28. Absence of a
+finding does not prove the project is clean — it may inherit the dependency
+through a workspace mechanism the parser cannot see.
+
+---
+
+## MCP011 — Go MCP SDK not serving the 2026-07-28 revision
+
+**Severity:** warning. **Source scan only** — a live probe cannot see `go.mod`.
+
+Two different defects share this id, because both end the same way: the server
+does not serve the current revision.
+
+### Case 1 — the module is behind
+
+| Module | First release speaking 2026-07-28 |
+| --- | --- |
+| `github.com/modelcontextprotocol/go-sdk` | **v1.7.0** (v1.6.1 is the last on 2025-11-25) |
+| `github.com/mark3labs/mcp-go` | **v1.0.0** (v0.58.0 is the last on 2025-11-25) |
+
+```bash
+go get github.com/modelcontextprotocol/go-sdk@v1.7.0
+go mod tidy
+```
+
+**Do not change any import path, and do not look for a 2.x.** This is the part
+that catches people who have migrated the other SDKs first. TypeScript renamed
+its packages and Rust went to a new major, so the reflex is to expect a `/v2`.
+Go has none — `github.com/modelcontextprotocol/go-sdk/v2` does not exist on the
+module proxy. The SDK crossed the protocol break *inside* its v1 line, at a
+minor. Every `import "github.com/modelcontextprotocol/go-sdk/mcp"` in your tree
+stays exactly as it is.
+
+Note what does *not* change: neither crossing moves the toolchain floor.
+go-sdk asks for `go 1.25.0` at both v1.6.1 and v1.7.0, and mcp-go asks for
+`go 1.25.5` at both v0.58.0 and v1.0.0 (read from the published `go.mod` of
+each, 2026-09-03). Do not plan a Go upgrade around this.
+
+### Case 2 — the module is current, but the HTTP transport is not stateless
+
+This one fires on a server that has *already* upgraded, and it is the one worth
+reading twice. Upgrading the module is necessary and not sufficient: the
+official SDK's streamable HTTP transport serves 2026-07-28 **only** when it is
+configured stateless. Left unset, the transport reports only the legacy
+versions and clients negotiate down to 2025-11-25 — silently, with a server
+that looks upgraded and a client that never says why.
+
+```go
+// Before — upgraded to v1.7.0, still serving 2025-11-25 over HTTP.
+handler := mcp.NewStreamableHTTPHandler(getServer, nil)
+
+// After — serves the current revision.
+handler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
+    Stateless: true,
+})
+```
+
+Stateless means what it says, so this is a real change and not a flag flip. In
+that mode the server neither reads nor sets `Mcp-Session-Id`, `GET` and
+`DELETE` return 405, and any state you kept per session has to move onto
+explicit handles passed back as ordinary tool arguments — the same remediation
+MCP002 describes. If a server-to-client request was relied on, it is rejected
+outright: there is no stream to answer on.
+
+**A stdio server needs none of this.** The stdio transport does not restrict
+protocol versions at all, so on v1.7.0 it serves the revision with no flag.
+The rule never asks a stdio server for one.
+
+**mark3labs is different again.** `mcp-go` v1.0.0 advertises every version it
+implements by default and decides the era per request, so a stateful streamable
+HTTP server on that SDK is not a defect. This rule applies case 2 only to the
+official SDK.
+
+### What the rule deliberately will not tell you
+
+Four kinds of requirement are reported by nothing, because in each the version
+string does not describe what would actually build:
+
+- a module replaced by a local path, or by a *different* module path — a fork,
+  whose version number describes the fork and not the SDK. A same-path
+  `replace` is a version pin, not a fork: it resolves to exactly the module the
+  `require` line names, so it is read from its right-hand side and treated
+  exactly like writing that version on the `require` line;
+- a pseudo-version such as `v1.6.2-0.20260801000000-abcdef123456` — it names a
+  commit, not a release;
+- a `+incompatible` tag — it marks a module that never adopted module-aware
+  versioning, so the major says nothing about the protocol;
+- a `// indirect` requirement — the toolchain asserts nothing here imports it,
+  so it is not this project's SDK choice and `go mod tidy` may rewrite it.
+
+Check those by hand. `go.work` is read for its `use` and `replace` directives:
+a workspace replacement overrides the module-level one, but only for the
+modules that workspace `use`s, and only when it sits at or above them — Go
+finds a `go.work` in the working directory or an ancestor, never below.
+
+Case 2 is also an argument from absence: it fires only when the stateless
+opt-in appears nowhere in the scanned source. A server that sets it somewhere
+the scan cannot reach — another module, a config path — is a false positive.
 
 ---
 

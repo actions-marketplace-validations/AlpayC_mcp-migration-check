@@ -25,7 +25,7 @@ jobs:
     name: cloudflare workers
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # Secrets cannot be read in a job-level `if`, so the gate lives here. A
       # missing token reports a skip rather than a red X — the workflow lands
